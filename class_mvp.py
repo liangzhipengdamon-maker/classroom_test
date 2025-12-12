@@ -6,7 +6,7 @@ DOMAIN = "https://class.cangfengge.com"
 
 from flask import Flask, request, render_template_string, send_from_directory, jsonify
 from PIL import Image, ImageDraw, ImageFont
-import os, time, uuid, json, base64, hashlib, csv
+import os, time, uuid, json, base64, hashlib, csv, logging
 import requests
 from datetime import datetime
 from dotenv import load_dotenv
@@ -579,6 +579,16 @@ def stats_page():
         ai_records = [r for r in records if r.get('ai_generated')]
         avg_ai_length = round(sum(r.get('comment_length', 0) for r in ai_records) / len(ai_records), 1) if ai_records else 0
         
+        # 获取所有班级列表
+        all_classes = sorted(list(set(r.get('class', '') for r in records if r.get('class'))))
+        
+        # 构建班级导出按钮 HTML（需要 URL 编码班级名称）
+        from urllib.parse import quote
+        class_buttons_html = ''.join(
+            f'<a href="/export?class={quote(cls)}" class="btn btn-secondary" title="导出 {cls}">📤 {cls}</a>'
+            for cls in all_classes
+        )
+        
         html = f'''
         <!DOCTYPE html>
         <html>
@@ -591,13 +601,16 @@ def stats_page():
                 body {{ padding:20px; background:#f8f9fa; }}
                 .container {{ max-width:700px; margin:0 auto; }}
                 h1 {{ color:#e74c3c; text-align:center; margin-bottom:30px; font-size:28px; }}
+                h3 {{ color:#2c3e50; margin-top:25px; margin-bottom:12px; font-size:16px; }}
                 .stat-box {{ background:white; border-radius:12px; padding:20px; margin-bottom:15px; box-shadow:0 2px 8px rgba(0,0,0,0.05); }}
                 .stat-label {{ color:#666; font-size:14px; margin-bottom:8px; }}
                 .stat-value {{ color:#2c3e50; font-size:32px; font-weight:600; }}
                 .stat-unit {{ color:#999; font-size:14px; margin-left:8px; }}
-                .buttons {{ display:flex; gap:10px; margin-top:20px; }}
-                .btn {{ flex:1; background:#e74c3c; color:white; border:none; border-radius:8px; padding:12px; font-size:14px; cursor:pointer; text-decoration:none; text-align:center; }}
+                .buttons {{ display:flex; flex-wrap:wrap; gap:10px; margin-top:20px; }}
+                .btn {{ flex:1; min-width:150px; background:#e74c3c; color:white; border:none; border-radius:8px; padding:12px; font-size:14px; cursor:pointer; text-decoration:none; text-align:center; }}
                 .btn:hover {{ background:#c0392b; }}
+                .btn-secondary {{ background:#3498db; min-width:auto; flex:0 1 auto; }}
+                .btn-secondary:hover {{ background:#2980b9; }}
             </style>
         </head>
         <body>
@@ -624,6 +637,12 @@ def stats_page():
                     <div class="stat-value">{avg_ai_length} <span class="stat-unit">字</span></div>
                 </div>
                 
+                <h3>按班级导出</h3>
+                <div class="buttons">
+                    {class_buttons_html}
+                </div>
+                
+                <h3>全量导出</h3>
                 <div class="buttons">
                     <a href="/export" class="btn">📋 导出所有记录</a>
                     <a href="/upload" class="btn">📱 返回上传</a>
@@ -640,32 +659,47 @@ def stats_page():
 # 📋 CSV 导出接口 /export
 @app.route('/export')
 def export_csv():
-    """导出 CSV 文件，支持按班级或日期筛选"""
+    """\u5bfc出 CSV 文件，\u652f\u6301\u6309\u73ed\u7ea7\u6216\u65e5\u671f\u7b5b\u9009"""
     try:
+        from urllib.parse import unquote
+        
         class_name = request.args.get('class')
         date_str = request.args.get('date')
         
-        # 筛选记录
+        # \u8fdb\u884c URL \u89e3\u7801，\u5e76\u9a8c\u8bc1\u53c2\u6570
+        if class_name:
+            class_name = unquote(class_name)
+        if date_str:
+            date_str = unquote(date_str)
+        
+        # \u7b5b\u9009\u8bb0\u5f55
         records = filter_records(class_name=class_name, date_str=date_str)
         
-        # 生成 CSV
+        if not records:
+            return jsonify({"error": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u8bb0\u5f55"}), 400
+        
+        # \u751f\u6210 CSV
         csv_data = records_to_csv(records)
         
-        # 生成文件名
+        # \u751f\u6210\u6587\u4ef6\u540d
         if date_str:
             filename = f"classroom_records_{date_str}.csv"
         elif class_name:
-            filename = f"classroom_records_{class_name}.csv"
+            # CSV \u6587\u4ef6\u540d\u4e2d\u7f16\u7801\u4e2d\u6587为 \u6807\u51c6\u5b57\u8282
+            safe_class_name = class_name.replace('/', '_').replace('\\', '_')
+            filename = f"classroom_records_{safe_class_name}.csv"
         else:
             filename = f"classroom_records_{datetime.now().strftime('%Y%m%d')}.csv"
         
-        # 返回 CSV 文件
+        # \u8fd4\u56de CSV \u6587\u4ef6
         return csv_data, 200, {
             'Content-Type': 'text/csv; charset=utf-8',
             'Content-Disposition': f'attachment; filename="{filename}"'
         }
     
     except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"CSV \u5bfc\u51fa\u5931\u8d25: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 # 🏠 首页（重定向到上传页）
